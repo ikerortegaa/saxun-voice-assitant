@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import fastapi, openai, deepgram, pydub, asyncpg, redis, langfuse; print\\(''✓ dependencias core OK''\\)\")",
+      "Bash(python3 -c \"import fastapi, openai, pydub, asyncpg; print\\(''✓ dependencias core OK''\\)\")",
+      "Bash(pip3 --version)",
+      "Bash(python3.13 -m venv .venv)",
+      "Bash(.venv/bin/pip install --upgrade pip -q)",
+      "Bash(.venv/bin/pip install -r requirements.txt)",
+      "Bash(.venv/bin/python -c \"from lingua import Language, LanguageDetectorBuilder; print\\(''lingua 2.1.0 OK:'', Language.SPANISH\\)\")",
+      "Bash(docker compose -f \"/Users/ikerortega/Desktop/AITIK Solutions/projects/saxun-voice-assitant/docker-compose.yml\" up -d postgres redis)",
+      "Bash(.venv/bin/python -m pytest src/tests/test_security.py src/tests/test_rag.py -v --tb=short --no-cov)",
+      "Bash(.venv/bin/python -c \":*)",
+      "Bash(.venv/bin/pip install audioop-lts -q)",
+      "Bash(curl -s http://localhost:8000/health)",
+      "Bash(curl -s http://localhost:8000/docs)",
+      "Bash(.venv/bin/python -m src.scripts.ingest_docs --file ./rag-docs/saxun_faq_documentacion.pdf)",
+      "Bash(ngrok --version)",
+      "Bash(curl -s http://localhost:4040/api/tunnels)",
+      "Bash(curl -s https://hyperobtrusive-sharee-boreable.ngrok-free.dev/health -H \"ngrok-skip-browser-warning: 1\")",
+      "Bash(curl -s -X POST https://hyperobtrusive-sharee-boreable.ngrok-free.dev/api/v1/voice/incoming -H \"ngrok-skip-browser-warning: 1\" -d \"CallSid=TEST123&From=%2B34600000000&To=%2B34900000000\")",
+      "Bash(pgrep -la uvicorn)",
+      "Bash(ffmpeg -version)",
+      "Read(//opt/homebrew/bin/**)",
+      "Bash(curl -s -X POST http://localhost:8000/api/v1/voice/incoming -d \"CallSid=TEST_REAL&From=%2B34600000000&To=%2B34900000000\")",
+      "Bash(.venv/bin/python -m src.scripts.ingest)",
+      "Bash(.venv/bin/python -m src.scripts.ingest_docs)",
+      "Bash(.venv/bin/python -m src.scripts.ingest_docs --dir ./rag-docs)",
+      "Bash(.venv/bin/python -m src.scripts.verify_retrieval --query \"garantia productos\")",
+      "Bash(.venv/bin/python -m src.scripts.ingest_docs --dir ./rag-docs --dry-run)",
+      "Bash(.venv/bin/python -m src.scripts.ingest_docs --dir ./rag-docs --language es)",
+      "Bash(.venv/bin/python ingest.py)",
+      "Bash(.venv/bin/python src/scripts/ingest_docs.py)",
+      "Bash(.venv/bin/python src/scripts/ingest_docs.py --dir rag-docs)",
+      "Bash(.venv/bin/python -c \"from deepgram import LiveOptions; import inspect; print\\(inspect.signature\\(LiveOptions.__init__\\)\\)\")"
+    ]
+  }
+}

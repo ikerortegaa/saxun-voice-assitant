@@ -1,0 +1,140 @@
+version: "3.9"
+
+# ── Saxun Voice Assistant — Docker Compose (Desarrollo) ──────────────────────
+# Uso: docker compose up -d
+# Requiere: .env con las variables configuradas
+
+services:
+
+  # ── Aplicación principal ──────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: saxun-voice-app
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://saxun:saxunpass@postgres:5432/saxun_voice
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./rag-docs:/app/rag-docs:ro      # Documentos RAG (read-only)
+      - ./src:/app/src:ro                # Código (dev: para hot reload)
+    networks:
+      - saxun-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ── PostgreSQL + pgvector ─────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: saxun-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: saxun
+      POSTGRES_PASSWORD: saxunpass
+      POSTGRES_DB: saxun_voice
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./src/db/migrations/001_initial.sql:/docker-entrypoint-initdb.d/001_initial.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - saxun-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U saxun -d saxun_voice"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ─────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: saxun-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - saxun-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Langfuse (Observabilidad LLM — self-hosted) ───────────────────────────
+  langfuse-server:
+    image: langfuse/langfuse:latest
+    container_name: saxun-langfuse
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://saxun:saxunpass@postgres:5432/saxun_voice
+      NEXTAUTH_SECRET: change-me-in-production-langfuse-secret
+      NEXTAUTH_URL: http://localhost:3000
+      SALT: change-me-in-production-salt
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - saxun-net
+
+  # ── Grafana (Métricas) ────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: saxun-grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - saxun-net
+
+  # ── ngrok (Desarrollo: expone localhost a Twilio) ─────────────────────────
+  # Solo en desarrollo. En producción: usar dominio real con SSL.
+  # ngrok:
+  #   image: ngrok/ngrok:latest
+  #   container_name: saxun-ngrok
+  #   command: http app:8000 --log=stdout
+  #   environment:
+  #     NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
+  #   ports:
+  #     - "4040:4040"   # Interfaz web de ngrok
+  #   depends_on:
+  #     - app
+  #   networks:
+  #     - saxun-net
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  saxun-net:
+    driver: bridge
