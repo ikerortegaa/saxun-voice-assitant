@@ -75,14 +75,19 @@ class DeepgramSTT:
         )
 
         # Opciones de transcripción
+        # language="es" → calidad óptima para español (idioma del saludo inicial).
+        # La detección de idioma del usuario se hace sobre el texto transcrito
+        # mediante langdetect en state_machine.py; si el usuario responde en
+        # inglés o catalán, el orquestador cambia session.language y responde
+        # en ese idioma a partir del siguiente turno.
         options = LiveOptions(
             model=self._model,
-            language=self._language,
+            language="es",              # Español fijo para mejor transcripción
             smart_format=True,          # Puntuación y formato automático
             interim_results=True,       # Resultados intermedios para barge-in
-            utterance_end_ms="1000",    # 1s de silencio = fin de utterance
+            utterance_end_ms="1000",    # 1.0s de silencio = fin de utterance (antes 1500ms)
             vad_events=True,            # Eventos de actividad de voz
-            endpointing=400,            # Detectar fin de turno en 400ms
+            endpointing=800,            # 800ms: reduce cortes mid-frase (antes 500ms)
             encoding="mulaw",           # Formato de audio de Twilio
             sample_rate=8000,           # Twilio usa 8kHz
             channels=1,

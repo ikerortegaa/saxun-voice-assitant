@@ -87,6 +87,12 @@ class Settings(BaseSettings):
     zendesk_email: str = ""
     zendesk_api_token: str = ""
 
+    # ── Odoo ERP/CRM (demo) ───────────────────────────────────
+    odoo_url: str = ""          # https://mi-instancia.odoo.com
+    odoo_db: str = ""           # nombre de la base de datos Odoo
+    odoo_user: str = ""         # email del usuario API
+    odoo_password: str = ""     # contraseña o API key del usuario
+
     # ── Modo emergencia ───────────────────────────────────────
     emergency_mode: bool = False
 
@@ -101,6 +107,10 @@ class Settings(BaseSettings):
     @property
     def zendesk_enabled(self) -> bool:
         return bool(self.zendesk_subdomain and self.zendesk_api_token)
+
+    @property
+    def odoo_enabled(self) -> bool:
+        return bool(self.odoo_url and self.odoo_db and self.odoo_user)
 
     @property
     def elevenlabs_enabled(self) -> bool:

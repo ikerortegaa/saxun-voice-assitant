@@ -12,7 +12,7 @@ from loguru import logger
 
 from src.config import get_settings
 from src.models.session import Session, ConversationState
-from src.models.rag_models import LLMResponse, RAGAction
+from src.models.rag_models import LLMResponse, RAGAction, Chunk
 from src.rag.retriever import HybridRetriever
 from src.rag.guardrails import RAGGuardrails
 from src.voice.stt import STTResult, LanguageDetector
@@ -25,9 +25,9 @@ from src.conversation.context_manager import SessionContextManager
 
 # Respuestas estándar del sistema (sin LLM)
 GREETING = {
-    "es": "Buenos días, ha llamado a Saxun. Soy Marta. ¿En qué le puedo ayudar?",
-    "ca": "Bon dia, ha trucat a Saxun. Sóc la Marta. En què li puc ajudar?",
-    "en": "Good morning, you've reached Saxun. I'm Marta. How can I help you today?",
+    "es": "Buenos días, ha llamado a Saxun. Soy Laura. ¿En qué le puedo ayudar?",
+    "ca": "Bon dia, ha trucat a Saxun. Sóc la Laura. En què li puc ajudar?",
+    "en": "Good morning, you've reached Saxun. I'm Laura. How can I help you today?",
 }
 ASR_RETRY = {
     "es": "Le escucho pero no le entiendo bien. ¿Puede repetirlo?",
@@ -59,6 +59,115 @@ LANGUAGE_CONFIRM = {
     "ca": "Per descomptat! Podem continuar en català. En què li puc ajudar?",
     "es": "Claro que sí. Continuamos en español. ¿En qué le puedo ayudar?",
 }
+
+# Patrón para detectar número de pedido en el texto del cliente
+# Detecta: "pedido 1234", "orden 5678", "referencia 9012", "SO0042", "S00042"
+_ORDER_PATTERN = re.compile(
+    r'(?:'
+    r'(?:pedido|orden|referencia|número|num\.?)[^\d]{0,20}(\d{4,10})'  # pedido 1234, referencia es 9999
+    r'|'
+    r'\b(S[O0]\d{4,8})\b'  # SO0042 o S00042
+    r')',
+    re.IGNORECASE,
+)
+
+# Detecta intención de consultar un pedido SIN número (activa flujo de 2 turnos)
+_ORDER_INTENT_PATTERN = re.compile(
+    r'\b(?:pedido|estado\s+del\s+pedido|consultar\s+(?:el\s+)?pedido|'
+    r'mi\s+pedido|mi\s+orden|estado\s+de\s+(?:mi\s+)?(?:pedido|orden|envío)|'
+    r'dónde\s+está\s+(?:mi\s+)?(?:pedido|orden|paquete|envío)|'
+    r'seguimiento|cuando\s+llega|cuando\s+llega|no\s+ha\s+llegado|'
+    r'no\s+llegó|no\s+me\s+ha\s+llegado|entrega|envío)\b',
+    re.IGNORECASE,
+)
+
+def _extract_order_ref_from_reply(text: str) -> Optional[str]:
+    """
+    Extrae referencia de pedido de la respuesta STT del cliente.
+
+    Maneja tres casos reales de reconocimiento de voz:
+      - "1234"             → "1234"  (número directo ≥4 dígitos)
+      - "S 0 0 0 16"       → "S0016" (referencia deletreada carácter a carácter)
+      - "pedido número 16" → "16"    (número corto, demo con pedidos pequeños)
+
+    Los pedidos en Odoo de demo suelen ser SO0001…SO0099, por eso aceptamos
+    números de 2+ dígitos como último recurso.
+    """
+    clean = re.sub(r'[^\w\s]', ' ', text.upper()).strip()
+
+    # 1. Número largo directo (≥4 dígitos) — caso de producción
+    m = re.search(r'\b(\d{4,10})\b', clean)
+    if m:
+        return m.group(1)
+
+    # 2. Reconstruir secuencia deletreada: tokens del tipo S/O/SO + dígitos
+    # Ejemplo: "S 0 0 0 16" → tokens = ["S","0","0","0","16"] → "S0016"
+    tokens = clean.split()
+    n = len(tokens)
+    best: Optional[str] = None
+    for start in range(n):
+        tok0 = tokens[start]
+        if not (re.fullmatch(r'[SO]', tok0) or re.fullmatch(r'\d{1,3}', tok0)):
+            continue
+        seq: list[str] = []
+        i = start
+        # Consumir prefijo S/O de hasta 2 letras separadas ("S O" → "SO")
+        while i < n and re.fullmatch(r'[SO]', tokens[i]) and len(seq) < 2:
+            seq.append(tokens[i])
+            i += 1
+        # Consumir dígitos individuales o cortos
+        while i < n and re.fullmatch(r'\d{1,3}', tokens[i]):
+            seq.append(tokens[i])
+            i += 1
+        if len(seq) >= 2:
+            candidate = ''.join(seq)
+            if re.match(r'^[A-Z]{0,2}\d{2,}$', candidate):
+                if best is None or len(candidate) > len(best):
+                    best = candidate
+
+    if best:
+        return best
+
+    # 3. Número corto (2-3 dígitos) — para pedidos de demo pequeños
+    m = re.search(r'\b(\d{2,3})\b', clean)
+    if m:
+        return m.group(1)
+
+    return None
+
+# Preguntas de Laura para pedir el nº de pedido
+_ASK_ORDER_NUMBER = {
+    "es": "Por supuesto. ¿Puede decirme el número de pedido?",
+    "ca": "Per descomptat. Pot dir-me el número de comanda?",
+    "en": "Of course. Could you tell me your order number?",
+}
+# Respuesta cuando el pedido no se encuentra
+_ORDER_NOT_FOUND = {
+    "es": "No he podido encontrar ese pedido. ¿Puede confirmar el número de pedido?",
+    "ca": "No he pogut trobar aquesta comanda. Pot confirmar el número de comanda?",
+    "en": "I couldn't find that order. Could you confirm the order number?",
+}
+# Confirmación antes del lookup (evita silencio y pronuncia el nº correctamente)
+_LOOKING_UP_ORDER = {
+    "es": "Un momento, voy a consultar los detalles del pedido {ref}.",
+    "ca": "Un moment, vaig a consultar els detalls de la comanda {ref}.",
+    "en": "One moment, let me look up the details for order {ref}.",
+}
+
+
+def _format_order_ref_for_tts(ref: str) -> str:
+    """
+    Formatea una referencia de pedido para que el TTS la pronuncie carácter a carácter.
+
+    Ejemplos:
+      'SO0007' → 'S-O-0-0-0-7'  → TTS: "ese-o-cero-cero-cero-siete"
+      'SO16'   → 'S-O-1-6'      → TTS: "ese-o-uno-seis"
+      '7'      → '7'            → TTS: "siete" (número puro, sin separadores)
+    """
+    ref = ref.upper()
+    if ref.isdigit():
+        return ref  # número puro: el TTS lo lee como número directamente
+    return "-".join(ref)
 
 # Patrones para detectar peticiones explícitas de cambio de idioma
 _LANG_PATTERNS = [
@@ -102,6 +211,7 @@ class ConversationOrchestrator:
         self._lang_detector = LanguageDetector()
         self._settings = get_settings()
         self._processing = False      # lock: evitar procesar 2 utterances a la vez
+        self._pending_transcript: Optional[STTResult] = None  # último transcript mientras se procesaba
         self._start_time = time.time()
         self._tts_until: float = 0.0  # timestamp hasta el que el TTS sigue sonando
 
@@ -130,14 +240,32 @@ class ConversationOrchestrator:
         if not result.is_final:
             return
 
-        # Ignorar transcripciones mientras el TTS sigue sonando (eco del teléfono)
+        # Ignorar transcripciones mientras el TTS sigue sonando (eco del teléfono).
+        # Cuando estamos esperando nº de pedido, reducimos el margen a 0.9s
+        # (el eco telefónico tarda ~0.8s, el usuario responde al menos 1s después).
         if time.time() < self._tts_until:
-            logger.debug("TTS activo, ignorando transcripción (posible eco)")
-            return
+            if self._session.awaiting_order_number:
+                # En modo respuesta-pedido: solo bloquear durante el eco puro
+                echo_only_until = self._tts_until - 1.1   # 2.0s margin → 0.9s echo guard
+                if time.time() < echo_only_until:
+                    logger.debug(
+                        f"TTS activo (modo pedido), ignorando posible eco: '{result.text[:30]}'"
+                    )
+                    return
+                # Pasado el eco puro: procesar normalmente aunque el margen no haya expirado
+                logger.debug(
+                    f"TTS activo pero esperando nº pedido — procesando: '{result.text[:30]}'"
+                )
+            else:
+                logger.debug(
+                    f"TTS activo, ignorando transcripción (posible eco): '{result.text[:30]}'"
+                )
+                return
 
-        # Evitar procesar en paralelo
+        # Evitar procesar en paralelo — guardar el último para procesarlo después
         if self._processing:
-            logger.debug("Ya procesando utterance anterior, ignorando")
+            self._pending_transcript = result
+            logger.debug(f"Procesando turno anterior, guardando: '{result.text[:40]}'")
             return
 
         text = result.text.strip()
@@ -145,6 +273,7 @@ class ConversationOrchestrator:
             return
 
         self._processing = True
+        self._pending_transcript = None
         try:
             await self._process_turn(text, result.confidence, result.language)
         except Exception as e:
@@ -152,6 +281,11 @@ class ConversationOrchestrator:
             await self._speak_and_handoff("error_tecnico")
         finally:
             self._processing = False
+            # Procesar el transcript pendiente si llegó mientras estábamos ocupados
+            if self._pending_transcript:
+                pending = self._pending_transcript
+                self._pending_transcript = None
+                asyncio.create_task(self.on_transcript(pending))
 
     async def on_barge_in(self, new_text: str, confidence: float) -> None:
         """
@@ -231,11 +365,21 @@ class ConversationOrchestrator:
 
         self._session.failed_asr_count = 0
 
-        # 2. Detectar cambio de idioma (Deepgram o petición explícita del cliente)
+        # 2. Detectar cambio de idioma
+        #    Fuente 1: Deepgram detect_language (por utterance)
+        #    Fuente 2: langdetect sobre el texto (backup, especialmente para catalán)
         if detected_lang and detected_lang != lang:
             lang = detected_lang
             self._session.language = lang
-            logger.debug(f"Idioma actualizado a: {lang}")
+            logger.debug(f"Idioma actualizado vía Deepgram a: {lang}")
+        else:
+            # Solo aplicar langdetect en los primeros 3 turnos o si el texto es largo
+            if self._session.turn_count <= 3 or len(text) > 30:
+                inferred = self._lang_detector.detect(text, lang)
+                if inferred != lang:
+                    self._session.language = inferred
+                    lang = inferred
+                    logger.debug(f"Idioma actualizado vía langdetect a: {lang}")
 
         requested_lang = self._detect_language_request(text)
         if requested_lang and requested_lang != self._session.language:
@@ -267,13 +411,78 @@ class ConversationOrchestrator:
             await self._speak_and_handoff("maximo_turnos_sin_resolucion")
             return
 
-        # 6. Retrieval RAG
+        # 6. Flujo Odoo:
+        #    6a. awaiting_order_number=True → extraer nº de la respuesta del cliente
+        #    6b. Número en el texto actual → lookup directo, guardar ref
+        #    6c. No hay número pero hay ref guardada + intención de pedido → reusar
+        #    6d. No hay número ni ref guardada + intención → preguntar
+        odoo_chunk = None
+        if self._settings.odoo_enabled:
+            if self._session.awaiting_order_number:
+                # El cliente responde con el número (sin keyword).
+                # Extractor inteligente: "S 0 0 0 16", "0016", "16", etc.
+                order_ref = _extract_order_ref_from_reply(text_redacted)
+                if order_ref:
+                    self._session.awaiting_order_number = False
+                    # Confirmar el número en voz alta ANTES del lookup (evita silencio
+                    # y pronuncia el código alfanumérico carácter a carácter).
+                    ref_spoken = _format_order_ref_for_tts(order_ref)
+                    await self._speak(
+                        _LOOKING_UP_ORDER.get(lang, _LOOKING_UP_ORDER["es"]).format(ref=ref_spoken)
+                    )
+                    odoo_chunk = await self._get_odoo_chunk_by_ref(order_ref, lang)
+                    if not odoo_chunk:
+                        await self._speak(_ORDER_NOT_FOUND.get(lang, _ORDER_NOT_FOUND["es"]))
+                        self._session.awaiting_order_number = True
+                        await self._ctx.save_session(self._session)
+                        return
+                    # Guardar para reutilizar en turnos siguientes
+                    self._session.current_order_ref = order_ref
+                else:
+                    logger.debug(
+                        f"awaiting_order_number: sin referencia en '{text_redacted[:50]}'"
+                    )
+                    await self._speak(_ASK_ORDER_NUMBER.get(lang, _ASK_ORDER_NUMBER["es"]))
+                    await self._ctx.save_session(self._session)
+                    return
+            else:
+                # Detección directa: número ya mencionado en el texto
+                odoo_chunk = await self._get_odoo_chunk(text_redacted, lang)
+                if odoo_chunk:
+                    # Actualizar ref guardada con el pedido recién mencionado
+                    m = _ORDER_PATTERN.search(text_redacted.upper())
+                    if m:
+                        new_ref = m.group(1) or m.group(2)
+                        if new_ref:
+                            self._session.current_order_ref = new_ref
+                elif self._session.current_order_ref and _ORDER_INTENT_PATTERN.search(text_redacted):
+                    # Pregunta de seguimiento sobre el mismo pedido → reusar sin preguntar
+                    logger.debug(
+                        f"Reutilizando pedido guardado: {self._session.current_order_ref}"
+                    )
+                    odoo_chunk = await self._get_odoo_chunk_by_ref(
+                        self._session.current_order_ref, lang
+                    )
+                elif _ORDER_INTENT_PATTERN.search(text_redacted):
+                    # Sin ref guardada → pedir número
+                    await self._speak(_ASK_ORDER_NUMBER.get(lang, _ASK_ORDER_NUMBER["es"]))
+                    self._session.awaiting_order_number = True
+                    await self._ctx.save_session(self._session)
+                    return
+
+        # 7. Retrieval RAG
+        # language=None → busca en todos los idiomas (necesario cuando los docs
+        # están en es pero el cliente habla en/ca: el LLM traduce en la respuesta)
         retrieval = await self._retriever.retrieve(
             query=text_redacted,
-            language=lang,
+            language=None,
         )
 
-        # 7. Logging de retrieval
+        # Prepend Odoo chunk como contexto de alta relevancia
+        if odoo_chunk:
+            retrieval.chunks.insert(0, odoo_chunk)
+
+        # 8. Logging de retrieval
         await self._audit.log_rag_query(
             session_id=self._session.session_id,
             query_length=len(text_redacted),
@@ -284,7 +493,7 @@ class ConversationOrchestrator:
             doc_ids_accessed=[c.doc_id for c in retrieval.chunks],
         )
 
-        # 8. Generación de respuesta con guardrails
+        # 9. Generación de respuesta con guardrails
         # on_text_ready: TTS se lanza en cuanto response_text llega del stream,
         # en paralelo con el resto del JSON → reduce silencio percibido ~500-700ms.
         history = self._session.get_history_for_llm()
@@ -304,7 +513,7 @@ class ConversationOrchestrator:
             on_text_ready=on_text_ready,
         )
 
-        # 9. Registrar turno del asistente
+        # 10. Registrar turno del asistente
         self._session.add_turn(
             "assistant",
             llm_response.response_text,
@@ -313,7 +522,7 @@ class ConversationOrchestrator:
             citations=[c.model_dump() for c in llm_response.citations],
         )
 
-        # 10. Ejecutar acción (no re-hablar si el TTS ya se lanzó vía streaming)
+        # 11. Ejecutar acción (no re-hablar si el TTS ya se lanzó vía streaming)
         await self._execute_action(llm_response, text_pre_spoken=text_was_pre_spoken)
         await self._ctx.save_session(self._session)
 
@@ -339,13 +548,24 @@ class ConversationOrchestrator:
             if not text_pre_spoken:
                 await self._speak(response.response_text)
 
-        elif response.action in (RAGAction.NO_EVIDENCE, RAGAction.HANDOFF):
+        elif response.action == RAGAction.HANDOFF:
+            # Handoff explícito del LLM (reclamación, frustración, legal, cancelación)
             self._session.unresolved_turns += 1
-            if self._session.unresolved_turns >= self.MAX_UNRESOLVED_TURNS:
-                response.handoff_reason = "maximo_turnos_sin_resolucion"
             if not text_pre_spoken:
                 await self._speak(response.response_text)
             await self._trigger_handoff(response)
+
+        elif response.action == RAGAction.NO_EVIDENCE:
+            # Sin evidencia RAG: dar MAX_UNRESOLVED_TURNS oportunidades antes de derivar
+            self._session.unresolved_turns += 1
+            if not text_pre_spoken:
+                await self._speak(response.response_text)
+            if self._session.unresolved_turns >= self.MAX_UNRESOLVED_TURNS:
+                response.handoff_reason = "maximo_turnos_sin_resolucion"
+                await self._trigger_handoff(response)
+            else:
+                # Mantener la conversación activa para que el cliente pueda reformular
+                self._session.state = ConversationState.INTENT_CAPTURE
 
     async def _trigger_handoff(self, response: LLMResponse) -> None:
         """Inicia el proceso de derivación a agente humano."""
@@ -387,11 +607,65 @@ class ConversationOrchestrator:
         self._session.tts_active = True
         audio = await self._tts.synthesize(text, self._session.language)
         if audio:
-            # μ-law 8kHz = 8000 bytes/s → estimar duración de reproducción + margen
-            playback_secs = len(audio) / 8000 + 0.5
+            # μ-law 8kHz = 8000 bytes/s + 2.0s margen (Twilio buffer + latencia + eco telefónico)
+            playback_secs = len(audio) / 8000 + 2.0
             self._tts_until = time.time() + playback_secs
             await self._send_audio(audio)
         self._session.tts_active = False
+
+    # ── Odoo integration ──────────────────────────────────────────────────────
+
+    async def _get_odoo_chunk_by_ref(self, order_ref: str, language: str) -> Optional[Chunk]:
+        """Consulta Odoo directamente por referencia (sin necesidad de keyword en texto)."""
+        from src.integrations.odoo_client import get_odoo_client
+        context_text = await get_odoo_client().get_order_context(order_ref)
+        if not context_text:
+            return None
+        return Chunk(
+            chunk_id=f"odoo_{order_ref}",
+            doc_id="odoo_erp_live",
+            content=context_text,
+            section="pedido_en_tiempo_real",
+            language=language,
+            sensitivity="internal",
+            score=0.95,
+            metadata={"source": "odoo", "order_ref": order_ref},
+        )
+
+    async def _get_odoo_chunk(self, text: str, language: str) -> Optional[Chunk]:
+        """
+        Si el texto menciona un número de pedido y Odoo está configurado,
+        consulta el ERP y devuelve un Chunk con los datos reales del pedido.
+        Devuelve None si Odoo no está habilitado o el pedido no se encuentra.
+        """
+        if not self._settings.odoo_enabled:
+            return None
+
+        m = _ORDER_PATTERN.search(text)
+        if not m:
+            return None
+
+        order_ref = m.group(1) or m.group(2)
+        if not order_ref:
+            return None
+
+        # Import aquí para evitar ciclos de dependencia en tests
+        from src.integrations.odoo_client import get_odoo_client
+        context_text = await get_odoo_client().get_order_context(order_ref)
+
+        if not context_text:
+            return None
+
+        return Chunk(
+            chunk_id=f"odoo_{order_ref}",
+            doc_id="odoo_erp_live",
+            content=context_text,
+            section="pedido_en_tiempo_real",
+            language=language,
+            sensitivity="internal",
+            score=0.95,  # Alta prioridad — datos reales del ERP
+            metadata={"source": "odoo", "order_ref": order_ref},
+        )
 
     async def _speak_and_handoff(self, reason: str) -> None:
         """Dice mensaje de derivación y ejecuta handoff."""

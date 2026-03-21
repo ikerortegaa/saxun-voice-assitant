@@ -43,7 +43,7 @@ QUEUE_MAP: dict[str, HandoffQueue] = {
     "soporte_tecnico_avanzado":     HandoffQueue.TECHNICAL,
     "solicitud_gdpr":               HandoffQueue.DPO,
 }
-
+ 
 EMOTIONAL_KEYWORDS = {
     "frustrado": ["enfadado", "molesto", "harto", "indignado", "furioso",
                   "no me ayuda", "no funciona", "lleváis semanas", "ya he llamado"],

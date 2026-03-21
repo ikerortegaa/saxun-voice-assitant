@@ -32,7 +32,23 @@
       "Bash(.venv/bin/python ingest.py)",
       "Bash(.venv/bin/python src/scripts/ingest_docs.py)",
       "Bash(.venv/bin/python src/scripts/ingest_docs.py --dir rag-docs)",
-      "Bash(.venv/bin/python -c \"from deepgram import LiveOptions; import inspect; print\\(inspect.signature\\(LiveOptions.__init__\\)\\)\")"
+      "Bash(.venv/bin/python -c \"from deepgram import LiveOptions; import inspect; print\\(inspect.signature\\(LiveOptions.__init__\\)\\)\")",
+      "Bash(.venv/bin/pip install fpdf2 -q)",
+      "Bash(.venv/bin/python generate_test_docs.py)",
+      "Bash(python3 -c \":*)",
+      "Bash(.venv/bin/python -m pytest src/tests/ -v --no-cov)",
+      "Bash(.venv/bin/python -m pytest src/tests/ --no-cov -q)",
+      "Bash(psql postgresql://saxun:saxunpass@localhost:5432/saxun_voice -c \"SELECT doc_id, chunk_count, ingested_at FROM document_registry ORDER BY ingested_at;\")",
+      "Bash(python -m pytest src/tests/test_odoo.py -v)",
+      "Bash(.venv/bin/pytest src/tests/test_odoo.py -v)",
+      "Bash(.venv/bin/pytest src/tests/test_rag.py -v)",
+      "Bash(.venv/bin/pytest)",
+      "Bash(PYTHONPATH=. .venv/bin/pytest)",
+      "Bash(PYTHONPATH=. .venv/bin/pytest src/tests/test_odoo.py -v --tb=long)",
+      "Bash(PYTHONPATH=. .venv/bin/pytest src/tests/test_odoo.py -v)",
+      "Bash(PYTHONPATH=. .venv/bin/python generate_test_docs.py)",
+      "Bash(PYTHONPATH=. .venv/bin/python src/scripts/ingest_docs.py --dir rag-docs)",
+      "Bash(PYTHONPATH=. .venv/bin/pytest src/tests/test_odoo.py::TestExtractOrderRefFromReply -v)"
     ]
   }
 }

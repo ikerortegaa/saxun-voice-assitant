@@ -19,7 +19,7 @@ from src.security.pii_redactor import get_redactor
 
 
 # ── System prompt (no modificar sin validar en golden dataset) ────────────────
-SYSTEM_PROMPT = """Eres Marta, agente de atención al cliente de Saxun. Atiendes llamadas telefónicas.
+SYSTEM_PROMPT = """Eres Laura, agente de atención al cliente de Saxun. Atiendes llamadas telefónicas.
 Habla exactamente como lo haría un agente humano: natural, empática, conversacional.
 
 REGLAS ABSOLUTAS (incumplirlas causa fallo crítico):
@@ -173,7 +173,7 @@ class RAGGuardrails:
             model=self._model,
             messages=messages,
             temperature=0.2,
-            max_tokens=150,         # 2-3 frases de voz (~80-100 tokens texto + JSON overhead)
+            max_tokens=250,         # JSON con citations ~170-200 tokens; 250 con margen seguro
             response_format={"type": "json_object"},
             timeout=8.0,
         )
@@ -211,7 +211,7 @@ class RAGGuardrails:
                 model=self._model,
                 messages=messages,
                 temperature=0.2,
-                max_tokens=150,
+                max_tokens=250,
                 response_format={"type": "json_object"},
                 stream=True,
                 timeout=8.0,
@@ -250,7 +250,7 @@ class RAGGuardrails:
                 model=self._model,
                 messages=messages,
                 temperature=0.2,
-                max_tokens=150,
+                max_tokens=250,
                 response_format={"type": "json_object"},
                 timeout=8.0,
             )
@@ -343,11 +343,11 @@ class RAGGuardrails:
             response.action = RAGAction.NO_EVIDENCE
             response.confidence = 0.0
 
-        # 2. Confianza baja → derivar
+        # 2. Confianza baja → marcar como sin evidencia (no handoff inmediato)
+        #    El orquestador dará MAX_UNRESOLVED_TURNS oportunidades antes de derivar
         if (response.confidence < self._conf_threshold
                 and response.action == RAGAction.RESPOND):
-            response.action = RAGAction.HANDOFF
-            response.handoff_reason = "baja_confianza"
+            response.action = RAGAction.NO_EVIDENCE
 
         # 3. Indicadores de alucinación en el texto
         if self._redactor.has_hallucination_indicators(response.response_text):

@@ -44,6 +44,8 @@ class Session(BaseModel):
     failed_asr_count: int = 0           # reintentos ASR consecutivos fallidos
     unresolved_turns: int = 0           # turnos sin resolución del mismo tema
     tts_active: bool = False
+    awaiting_order_number: bool = False  # True: Laura preguntó el nº de pedido, espera respuesta
+    current_order_ref: Optional[str] = None  # Último pedido consultado — se reutiliza en turnos siguientes
     started_at: datetime = Field(default_factory=datetime.utcnow)
     metadata: dict = Field(default_factory=dict)
 

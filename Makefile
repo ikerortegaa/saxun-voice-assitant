@@ -30,13 +30,16 @@ dev:
 
 # ── Tests ─────────────────────────────────────────────────────
 test:
-	pytest src/tests/ -v --tb=short
+	PYTHONPATH=. pytest src/tests/ -v --tb=short
 
 test-security:
-	pytest src/tests/test_security.py -v
+	PYTHONPATH=. pytest src/tests/test_security.py -v
 
 test-rag:
-	pytest src/tests/test_rag.py -v
+	PYTHONPATH=. pytest src/tests/test_rag.py -v
+
+test-odoo:
+	PYTHONPATH=. pytest src/tests/test_odoo.py -v
 
 # ── Linting ───────────────────────────────────────────────────
 lint:
