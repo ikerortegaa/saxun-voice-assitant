@@ -48,7 +48,12 @@
       "Bash(PYTHONPATH=. .venv/bin/pytest src/tests/test_odoo.py -v)",
       "Bash(PYTHONPATH=. .venv/bin/python generate_test_docs.py)",
       "Bash(PYTHONPATH=. .venv/bin/python src/scripts/ingest_docs.py --dir rag-docs)",
-      "Bash(PYTHONPATH=. .venv/bin/pytest src/tests/test_odoo.py::TestExtractOrderRefFromReply -v)"
+      "Bash(PYTHONPATH=. .venv/bin/pytest src/tests/test_odoo.py::TestExtractOrderRefFromReply -v)",
+      "Bash(claude plugin *)",
+      "WebSearch",
+      "Bash(find \"/Users/ikerortega/Desktop/AITIK Solutions/projects/saxun-voice-assitant/src\" -name \"*.py\" -exec grep -l \"odoo_enabled\" {} \\\\;)",
+      "Bash(python -m pytest src/tests/test_voice_routes.py -v --no-cov)",
+      "Bash(python -m pytest src/tests/test_security.py src/tests/test_rag.py src/tests/test_retriever.py src/tests/test_stt.py -v --no-cov)"
     ]
   }
 }

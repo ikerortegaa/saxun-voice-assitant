@@ -190,10 +190,12 @@ class ElevenLabsTTS:
                     "text": text,
                     "model_id": self._model_id,
                     "voice_settings": {
-                        "stability": 0.5,
-                        "similarity_boost": 0.75,
+                        "stability": 0.35,
+                        "similarity_boost": 0.85,
+                        "style": 0.20,
                         "use_speaker_boost": True,
                     },
+                "optimize_streaming_latency": 3,
                 },
             )
             resp.raise_for_status()

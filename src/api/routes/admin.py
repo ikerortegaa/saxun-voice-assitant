@@ -5,7 +5,7 @@ Acceso restringido: solo uso interno/operacional.
 import os
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Header
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Header
 from fastapi.responses import JSONResponse
 from loguru import logger
 
@@ -199,6 +199,66 @@ async def rag_search(
             }
             for c in result.chunks
         ],
+    }
+
+
+# ── Simulador de conversación (test sin teléfono) ────────────────────────────
+
+@router.post("/chat")
+async def chat_simulator(
+    request: Request,
+    _: bool = Depends(verify_admin_token),
+):
+    """
+    Simula un turno de conversación completo (RAG → LLM → guardrails) sin Twilio ni voz.
+    Útil para probar el agente desde terminal o Postman.
+
+    Body JSON: {"message": "...", "session_id": "test-001", "language": "es", "history": [...]}
+    """
+    from src.rag.guardrails import RAGGuardrails
+    from src.conversation.context_manager import SessionContextManager
+
+    body = await request.json()
+    message = body.get("message", "").strip()
+    session_id = body.get("session_id", "test-001")
+    language = body.get("language", "es")
+    history = body.get("history", [])
+
+    if not message:
+        raise HTTPException(400, "Campo 'message' requerido")
+
+    db_pool = await get_db_pool()
+    retriever = HybridRetriever(db_pool)
+    guardrails = RAGGuardrails()
+
+    # RAG retrieval
+    retrieval = await retriever.retrieve(query=message, language=language)
+
+    # LLM + guardrails
+    response = await guardrails.generate_response(
+        query=message,
+        chunks=retrieval.chunks,
+        conversation_history=history,
+        language=language,
+        session_id=session_id,
+    )
+
+    # Preparar historial para siguiente turno
+    new_history = history + [
+        {"role": "user", "content": message},
+        {"role": "assistant", "content": response.response_text},
+    ]
+
+    return {
+        "response": response.response_text,
+        "action": response.action.value,
+        "confidence": round(response.confidence, 2),
+        "evidence_found": response.evidence_found,
+        "handoff_reason": response.handoff_reason,
+        "chunks_retrieved": len(retrieval.chunks),
+        "rag_method": retrieval.method,
+        "rag_latency_ms": round(retrieval.latency_ms, 1),
+        "history": new_history,
     }
 
 

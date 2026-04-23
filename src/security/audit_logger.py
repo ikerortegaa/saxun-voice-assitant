@@ -174,14 +174,39 @@ class AuditLogger:
             logger.warning("⚠️  Posible teléfono detectado en audit log — revisar")
 
     async def _persist_to_db(self, event: AuditEvent) -> None:
-        """Persiste el evento en base de datos (implementar en producción)."""
-        # TODO: Implementar con SQLAlchemy async
-        pass
+        """Persiste el evento en audit_logs (asyncpg). Fallo silencioso para no interrumpir llamada."""
+        try:
+            from src.db.database import get_db_pool
+            pool = await get_db_pool()
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO audit_logs
+                        (event_id, event_type, session_id, caller_hash, timestamp_utc, data)
+                    VALUES ($1, $2, $3, $4, $5::timestamptz, $6::jsonb)
+                    ON CONFLICT (event_id) DO NOTHING
+                    """,
+                    event.event_id,
+                    event.event_type.value,
+                    event.session_id,
+                    event.caller_hash,
+                    event.timestamp_utc,
+                    json.dumps(event.data, ensure_ascii=False, default=str),
+                )
+        except Exception as e:
+            logger.error(f"Audit DB persist failed for {event.event_id}: {e}")
 
 
-# Instancia global
-_audit_logger = AuditLogger()
+# Instancia global (lazy init — auto-habilita DB en producción)
+_audit_logger: AuditLogger | None = None
 
 
 def get_audit_logger() -> AuditLogger:
+    global _audit_logger
+    if _audit_logger is None:
+        try:
+            from src.config import get_settings
+            _audit_logger = AuditLogger(log_to_db=get_settings().is_production)
+        except Exception:
+            _audit_logger = AuditLogger(log_to_db=False)
     return _audit_logger

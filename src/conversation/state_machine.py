@@ -470,13 +470,26 @@ class ConversationOrchestrator:
                     await self._ctx.save_session(self._session)
                     return
 
-        # 7. Retrieval RAG
-        # language=None → busca en todos los idiomas (necesario cuando los docs
-        # están en es pero el cliente habla en/ca: el LLM traduce en la respuesta)
+        # 7. Retrieval RAG + filler en paralelo
+        # El filler ("Un momento...") tarda ~300ms en sintetizarse.
+        # RAG tarda ~300-600ms. Lanzar ambos en paralelo → el usuario oye algo
+        # de inmediato en lugar de 1-2s de silencio muerto.
+        filler_task = asyncio.create_task(self._tts.synthesize_filler(lang))
+
         retrieval = await self._retriever.retrieve(
             query=text_redacted,
             language=None,
         )
+
+        # Enviar filler si está listo (y aún no hemos hablado)
+        try:
+            filler_audio = filler_task.result() if filler_task.done() else await filler_task
+            if filler_audio:
+                filler_secs = len(filler_audio) / 8000 + 0.3
+                self._tts_until = time.time() + filler_secs
+                await self._send_audio(filler_audio)
+        except Exception:
+            pass  # filler no crítico — nunca bloquear el flujo principal
 
         # Prepend Odoo chunk como contexto de alta relevancia
         if odoo_chunk:
@@ -607,8 +620,11 @@ class ConversationOrchestrator:
         self._session.tts_active = True
         audio = await self._tts.synthesize(text, self._session.language)
         if audio:
-            # μ-law 8kHz = 8000 bytes/s + 2.0s margen (Twilio buffer + latencia + eco telefónico)
-            playback_secs = len(audio) / 8000 + 2.0
+            # μ-law 8kHz = 8000 bytes/s + margen adaptativo:
+            # audio corto (< 1s) → 0.5s; audio largo → 0.7s. El eco PSTN rara vez supera 0.5s.
+            audio_secs = len(audio) / 8000
+            echo_margin = 0.5 if audio_secs < 1.0 else 0.7
+            playback_secs = audio_secs + echo_margin
             self._tts_until = time.time() + playback_secs
             await self._send_audio(audio)
         self._session.tts_active = False
